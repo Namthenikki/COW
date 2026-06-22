@@ -4,16 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CoWatch — Room</title>
-  <meta name="description" content="Watch YouTube together in perfect sync with video calling.">
+  <meta name="description" content="Watch YouTube together ad-free in perfect sync with video calling.">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body class="room-page">
-  <!-- Notifications -->
   <div id="notifications" class="notifications"></div>
 
-  <!-- Header -->
   <header class="room-header">
     <div class="header-left">
       <a href="/" class="logo">
@@ -25,9 +23,14 @@
           <i class="ph ph-hash"></i>
           <span id="room-code">------</span>
         </span>
+        <span class="ad-free-pill"><i class="ph ph-shield-check"></i> 0 Ads</span>
       </div>
     </div>
     <div class="header-right">
+      <button id="browse-btn" class="header-btn browse-btn" title="Browse YouTube">
+        <i class="ph ph-compass"></i>
+        <span>Browse</span>
+      </button>
       <button id="copy-link-btn" class="header-btn" title="Copy invite link">
         <i class="ph ph-link"></i>
         <span>Share</span>
@@ -43,60 +46,111 @@
     </div>
   </header>
 
-  <!-- Main Content -->
   <main class="room-main">
-    <!-- Player Section -->
     <div class="player-section">
-      <!-- YouTube Player -->
-      <div class="player-wrapper">
-        <div id="youtube-player"></div>
+      <div class="player-wrapper" id="player-wrapper">
+        <video id="cowatch-video" playsinline preload="auto"></video>
+        <div class="player-controls-overlay" id="player-controls"></div>
+
+        <div class="now-playing" id="now-playing">
+          <img id="np-thumb" src="" alt="" class="hidden">
+          <div class="np-info">
+            <span class="np-label">Now Playing</span>
+            <h3 id="np-title">Pick a video to start</h3>
+            <p id="np-uploader"></p>
+          </div>
+        </div>
+
         <div class="player-placeholder" id="player-placeholder">
+          <div class="placeholder-glow"></div>
           <i class="ph ph-youtube-logo"></i>
-          <h2>Paste a YouTube link below to start watching</h2>
-          <p>Your partner will see the same video in perfect sync ✨</p>
+          <h2>Your ad-free theater awaits</h2>
+          <p>Browse YouTube, sign in to your account, pick any video — synced instantly with your partner. Zero ads. 🚫</p>
+          <button class="placeholder-cta" id="placeholder-browse-btn" type="button">
+            <i class="ph ph-compass"></i> Open YouTube Browser
+          </button>
+        </div>
+
+        <div class="player-loading hidden" id="player-loading">
+          <div class="loader-ring"></div>
+          <span>Pre-buffering 10% ahead...</span>
         </div>
       </div>
 
-      <!-- Video URL Input -->
       <div class="url-input-wrapper">
         <div class="url-input-container">
-          <i class="ph ph-link"></i>
-          <input type="text" id="video-url-input" placeholder="Paste YouTube URL here..." autocomplete="off">
+          <i class="ph ph-magnifying-glass"></i>
+          <input type="text" id="video-url-input" placeholder="Search or paste YouTube URL..." autocomplete="off">
           <button id="load-video-btn" class="load-btn">
             <i class="ph ph-play"></i>
-            <span>Load</span>
+            <span>Play</span>
           </button>
         </div>
       </div>
 
-      <!-- Video Call Overlay (floats over player) -->
-      <div id="call-overlay" class="call-overlay">
-        <div id="remote-video-container" class="video-container remote">
-          <video id="remote-video" autoplay playsinline></video>
-          <span class="video-label">Partner</span>
-        </div>
-        <div id="local-video-container" class="video-container local">
-          <video id="local-video" autoplay playsinline muted></video>
-          <span class="video-label">You</span>
-        </div>
-        <div class="call-controls" id="call-controls">
-          <button id="minimize-btn" class="call-control-btn" title="Minimize Call">
-            <i class="ph ph-arrows-in-simple"></i>
-          </button>
-          <button id="mute-btn" class="call-control-btn" title="Toggle Microphone">
-            <i class="ph ph-microphone"></i>
-          </button>
-          <button id="camera-btn" class="call-control-btn" title="Toggle Camera">
-            <i class="ph ph-video-camera"></i>
-          </button>
-          <button id="end-call-btn" class="call-control-btn end-call" title="End Call">
-            <i class="ph ph-phone-disconnect"></i>
+      <!-- YouTube Browser Panel -->
+      <div class="yt-browser" id="yt-browser">
+        <div class="yt-browser-header">
+          <div class="yt-search-bar">
+            <i class="ph ph-magnifying-glass"></i>
+            <input type="text" id="yt-search-input" placeholder="Search YouTube..." autocomplete="off">
+          </div>
+          <button class="yt-close-btn" id="yt-close-btn" type="button" title="Close">
+            <i class="ph ph-x"></i>
           </button>
         </div>
+
+        <div class="yt-tabs">
+          <button class="yt-tab active" data-tab="discover" type="button">
+            <i class="ph ph-fire"></i> Trending
+          </button>
+          <button class="yt-tab" data-tab="search" type="button">
+            <i class="ph ph-magnifying-glass"></i> Search
+          </button>
+          <button class="yt-tab" data-tab="library" type="button">
+            <i class="ph ph-books"></i> My Library
+          </button>
+        </div>
+
+        <div id="yt-user-bar" class="yt-user-bar" style="display:none">
+          <img src="" alt="" width="28" height="28">
+          <span class="yt-user-name">You</span>
+          <button id="yt-logout-btn" class="yt-logout-btn" type="button">Sign out</button>
+        </div>
+
+        <button id="yt-login-btn" class="yt-login-btn" type="button">
+          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" width="18" height="18">
+          Sign in with Google for your subscriptions & playlists
+        </button>
+
+        <div id="yt-login-prompt" class="yt-login-prompt" style="display:none">
+          <i class="ph ph-lock-key"></i>
+          <p>Sign in to access your YouTube subscriptions, playlists & liked videos</p>
+        </div>
+
+        <div class="yt-panels">
+          <div class="yt-panel active" id="yt-panel-discover">
+            <h3 class="yt-section-title"><i class="ph ph-trend-up"></i> Trending Now</h3>
+            <div class="yt-grid" id="yt-discover-grid"></div>
+          </div>
+          <div class="yt-panel" id="yt-panel-search">
+            <h3 class="yt-section-title"><i class="ph ph-list-magnifying-glass"></i> Results</h3>
+            <div class="yt-grid" id="yt-search-grid"></div>
+          </div>
+          <div class="yt-panel" id="yt-panel-library">
+            <h3 class="yt-section-title"><i class="ph ph-users-three"></i> Subscriptions</h3>
+            <div class="yt-channels" id="yt-subs-grid"></div>
+            <h3 class="yt-section-title"><i class="ph ph-playlist"></i> Playlists</h3>
+            <div class="yt-playlists" id="yt-playlists-grid"></div>
+            <h3 class="yt-section-title"><i class="ph ph-heart"></i> Liked Videos</h3>
+            <div class="yt-grid" id="yt-liked-grid"></div>
+          </div>
+        </div>
+
+        <div class="yt-browser-toast" id="yt-browser-toast"></div>
       </div>
     </div>
 
-    <!-- Chat Sidebar -->
     <aside class="chat-section">
       <div class="chat-header">
         <h3><i class="ph ph-chat-dots"></i> Live Chat</h3>
@@ -104,7 +158,7 @@
       <div id="chat-messages" class="chat-messages">
         <div class="chat-welcome">
           <i class="ph ph-sparkle"></i>
-          <p>Welcome! Share the room code with your partner to start watching together.</p>
+          <p>Welcome! Share the room code with your partner to start watching together — ad-free.</p>
         </div>
       </div>
       <div class="chat-input-wrapper">
@@ -116,8 +170,45 @@
     </aside>
   </main>
 
-  <!-- PeerJS for P2P connections (CDN — no npm needed) -->
+  <div id="call-overlay" class="call-pip" aria-label="Partner video call">
+    <div class="pip-frame">
+      <div class="pip-drag-handle" id="pip-drag-handle">
+        <span class="pip-grip"><i class="ph ph-dots-six-vertical"></i></span>
+        <span class="pip-live"><span class="pip-live-dot"></span>Live</span>
+      </div>
+      <div id="remote-video-container" class="pip-video">
+        <video id="remote-video" autoplay playsinline></video>
+        <div class="pip-name-tag">
+          <i class="ph ph-user"></i>
+          <span>Partner</span>
+        </div>
+      </div>
+      <div class="call-controls" id="call-controls">
+        <button id="minimize-btn" class="call-control-btn" title="Minimize Call">
+          <i class="ph ph-arrows-in-simple"></i>
+        </button>
+        <button id="mute-btn" class="call-control-btn" title="Toggle Microphone">
+          <i class="ph ph-microphone"></i>
+        </button>
+        <button id="camera-btn" class="call-control-btn" title="Toggle Camera">
+          <i class="ph ph-video-camera"></i>
+        </button>
+        <button id="end-call-btn" class="call-control-btn end-call" title="End Call">
+          <i class="ph ph-phone-disconnect"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <video id="local-video" autoplay playsinline muted aria-hidden="true" class="local-video-hidden"></video>
+
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  <script src="/js/piped-client.js"></script>
+  <script src="/js/cowatch-player.js"></script>
+  <script src="/js/yt-auth.js"></script>
+  <script src="/js/yt-browser.js"></script>
   <script src="/js/room.js"></script>
 </body>
 </html>
+

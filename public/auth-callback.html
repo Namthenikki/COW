@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoWatch — Signing in...</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="auth-callback-page">
+  <div class="auth-callback-card">
+    <div class="auth-spinner"></div>
+    <h2>Connecting your YouTube...</h2>
+    <p id="auth-status">Almost there ✨</p>
+  </div>
+  <script>
+    (async () => {
+      const params = new URLSearchParams(location.search);
+      const code = params.get('code');
+      const error = params.get('error');
+      const status = document.getElementById('auth-status');
+
+      if (error) {
+        status.textContent = 'Sign-in cancelled.';
+        setTimeout(() => window.close(), 2000);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            redirectUri: `${location.origin}/auth/callback`
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error_description || data.error);
+
+        const auth = {
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+          expires_at: Date.now() + (data.expires_in || 3600) * 1000
+        };
+        sessionStorage.setItem('cowatch-yt-auth', JSON.stringify(auth));
+
+        if (window.opener) {
+          window.opener.postMessage({ type: 'cowatch-auth-success' }, '*');
+          window.close();
+        } else {
+          const returnUrl = sessionStorage.getItem('cowatch-return-url') || '/room.html';
+          sessionStorage.removeItem('cowatch-return-url');
+          location.href = returnUrl;
+        }
+      } catch (e) {
+        status.textContent = e.message || 'Sign-in failed';
+      }
+    })();
+  </script>
+</body>
+</html>

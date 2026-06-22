@@ -5,7 +5,8 @@
    - PeerJS handles signaling via its free cloud server
    - Data Channels carry sync events (play/pause/seek/chat)
    - Media Streams handle video calling
-   - YouTube IFrame API controls the player
+   - HTML5 ad-free player via Piped proxy
+   - Full YouTube browser with Google sign-in
    - Zero npm dependencies needed
    ═══════════════════════════════════════════════════════ */
 
@@ -16,8 +17,9 @@
   let peer = null;
   let dataConn = null;
   let mediaCall = null;
-  let player = null;
+  let cowatchPlayer = null;
   let playerReady = false;
+  let currentVideoMeta = {};
   let isRemoteAction = false;
   let remoteActionTimer = null;
   let roomCode = '';
@@ -38,11 +40,13 @@
 
   // Connection status
   let isConnected = false;
+  let lastDriftFix = 0;
 
   // ─── Constants ───
   const PEER_ID_PREFIX = 'cowatch-';
-  const DRIFT_THRESHOLD = 1.0;     // seconds before drift correction kicks in
-  const SEEK_DETECT_THRESHOLD = 2; // seconds jump to count as a seek
+  const DRIFT_THRESHOLD = 5.0;      // only hard-correct if >5s out of sync
+  const DRIFT_COOLDOWN = 20000;     // max one drift fix per 20s (stops seek loops)
+  const SYNC_PLAY_SEEK = 3.0;       // don't micro-seek on play
   const STATE_CHANGE_DEBOUNCE = 250; // ms
 
   // ═══════════════════════════════════════════════════════
@@ -61,7 +65,7 @@
     }
 
     initPeer();
-    initYouTubeAPI();
+    initPlayer();
     initUI();
   });
 
@@ -173,13 +177,16 @@
       document.getElementById('user-count').textContent = '2';
 
       // HOST: Send current video state to new joiner
-      if (isHost && player && playerReady && currentVideoId) {
+      if (isHost && cowatchPlayer && playerReady && currentVideoId) {
         setTimeout(() => {
           sendData({
             type: 'sync-state',
             videoId: currentVideoId,
-            isPlaying: player.getPlayerState() === 1, // YT.PlayerState.PLAYING
-            currentTime: player.getCurrentTime()
+            title: currentVideoMeta.title,
+            thumbnail: currentVideoMeta.thumbnail,
+            uploader: currentVideoMeta.uploader,
+            isPlaying: cowatchPlayer.isPlaying(),
+            currentTime: cowatchPlayer.getCurrentTime()
           });
         }, 500);
       }
@@ -210,39 +217,52 @@
       case 'load-video':
         setRemoteAction();
         currentVideoId = data.videoId;
-        loadVideoById(data.videoId);
+        loadVideoById(data.videoId, {
+          title: data.title,
+          thumbnail: data.thumbnail,
+          uploader: data.uploader
+        }, false).then(() => {
+          cowatchPlayer.play();
+        });
         showNotification('Partner loaded a video 🎬');
         break;
 
       case 'sync-play':
         setRemoteAction();
-        if (player && playerReady) {
-          const drift = Math.abs(player.getCurrentTime() - data.time);
-          if (drift > 0.5) player.seekTo(data.time, true);
-          player.playVideo();
+        if (cowatchPlayer && playerReady) {
+          const drift = Math.abs(cowatchPlayer.getCurrentTime() - data.time);
+          if (drift > SYNC_PLAY_SEEK) {
+            cowatchPlayer.seekTo(data.time, { silent: true, waitBuffer: false });
+          }
+          cowatchPlayer.play(true);
         }
         break;
 
       case 'sync-pause':
         setRemoteAction();
-        if (player && playerReady) {
-          player.seekTo(data.time, true);
-          player.pauseVideo();
+        if (cowatchPlayer && playerReady) {
+          const drift = Math.abs(cowatchPlayer.getCurrentTime() - data.time);
+          if (drift > 1.5) cowatchPlayer.seekTo(data.time, { silent: true, waitBuffer: false });
+          cowatchPlayer.pause();
         }
         break;
 
       case 'sync-seek':
         setRemoteAction();
-        if (player && playerReady) {
-          player.seekTo(data.time, true);
+        if (cowatchPlayer && playerReady) {
+          cowatchPlayer.seekTo(data.time, { silent: true });
         }
         break;
 
       case 'sync-state':
-        // Full state sync (usually on join)
         if (data.videoId) {
           currentVideoId = data.videoId;
-          if (player && playerReady) {
+          currentVideoMeta = {
+            title: data.title,
+            thumbnail: data.thumbnail,
+            uploader: data.uploader
+          };
+          if (cowatchPlayer) {
             applySyncState(data);
           } else {
             pendingState = data;
@@ -251,15 +271,16 @@
         break;
 
       case 'time-update':
-        // Periodic drift correction
-        if (player && playerReady && data.isPlaying) {
+        if (cowatchPlayer && playerReady && data.isPlaying) {
           try {
-            if (player.getPlayerState() === 1) { // PLAYING
-              const localTime = player.getCurrentTime();
+            if (cowatchPlayer.isPlaying()) {
+              const localTime = cowatchPlayer.getCurrentTime();
               const drift = Math.abs(localTime - data.time);
-              if (drift > DRIFT_THRESHOLD) {
+              const now = Date.now();
+              if (drift > DRIFT_THRESHOLD && now - lastDriftFix > DRIFT_COOLDOWN) {
+                lastDriftFix = now;
                 setRemoteAction();
-                player.seekTo(data.time, true);
+                cowatchPlayer.seekTo(data.time, { silent: true, waitBuffer: false });
                 console.log(`🔄 Drift corrected: ${drift.toFixed(2)}s`);
               }
             }
@@ -303,26 +324,30 @@
         break;
 
       case 'buffering':
-        showNotification(`${data.name || 'Partner'} is buffering...`);
-        break;
+        break; // handled locally — no seek spam
     }
   }
 
   function applySyncState(data) {
     setRemoteAction();
-    player.loadVideoById(data.videoId);
-    hidePlaceholder();
-
-    setTimeout(() => {
-      setRemoteAction();
-      if (data.isPlaying) {
-        player.seekTo(data.currentTime + 1.5, true); // +1.5s to compensate for load delay
-        player.playVideo();
-      } else {
-        player.seekTo(data.currentTime, true);
-        player.pauseVideo();
-      }
-    }, 1500);
+    loadVideoById(data.videoId, {
+      title: data.title,
+      thumbnail: data.thumbnail,
+      uploader: data.uploader
+    }, false).then(() => {
+      setTimeout(() => {
+        setRemoteAction();
+        if (data.isPlaying) {
+          cowatchPlayer.seekTo(data.currentTime + 0.5, { silent: true, waitBuffer: true });
+          cowatchPlayer.play();
+        } else {
+          cowatchPlayer.seekTo(data.currentTime, { silent: true, waitBuffer: false });
+          cowatchPlayer.pause();
+        }
+      }, 500);
+    }).catch((err) => {
+      console.error('Sync load failed:', err);
+    });
   }
 
   // ─── Send Data to Partner ───
@@ -345,88 +370,82 @@
   }
 
   // ═══════════════════════════════════════════════════════
-  //  YOUTUBE PLAYER
+  //  AD-FREE VIDEO PLAYER (Piped)
   // ═══════════════════════════════════════════════════════
 
-  function initYouTubeAPI() {
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(tag);
-  }
+  function initPlayer() {
+    const videoEl = document.getElementById('cowatch-video');
+    const controlsEl = document.getElementById('player-controls');
+    cowatchPlayer = new CowatchPlayer(videoEl, controlsEl);
 
-  // Called by YouTube API when ready
-  window.onYouTubeIframeAPIReady = function () {
-    player = new YT.Player('youtube-player', {
-      width: '100%',
-      height: '100%',
-      playerVars: {
-        autoplay: 0,
-        controls: 1,
-        rel: 0,
-        modestbranding: 1,
-        playsinline: 1,
-        fs: 1,
-        iv_load_policy: 3,
-        disablekb: 0
-      },
-      events: {
-        onReady: onPlayerReady,
-        onStateChange: onPlayerStateChange
+    cowatchPlayer.on('ready', () => {
+      playerReady = true;
+      if (pendingState) {
+        applySyncState(pendingState);
+        pendingState = null;
       }
     });
-  };
 
-  function onPlayerReady() {
-    playerReady = true;
-    console.log('🎬 YouTube player ready');
+    cowatchPlayer.on('play', (data) => {
+      if (isRemoteAction) return;
+      sendData({ type: 'sync-play', time: data.time });
+    });
 
-    // Apply any pending state from joining
+    cowatchPlayer.on('pause', (data) => {
+      if (isRemoteAction) return;
+      sendData({ type: 'sync-pause', time: data.time });
+    });
+
+    cowatchPlayer.on('seeked', (data) => {
+      if (isRemoteAction) return;
+      sendData({ type: 'sync-seek', time: data.time });
+    });
+
+    cowatchPlayer.on('buffering', () => {
+      // local stall recovery only — don't notify partner
+    });
+
+    cowatchPlayer.on('loaded', (meta) => {
+      updateNowPlaying(meta);
+      hideLoading();
+    });
+
+    YTBrowser.init((videoId, meta) => {
+      playVideo(videoId, meta);
+      YTBrowser.close();
+    });
+
     if (pendingState) {
       applySyncState(pendingState);
       pendingState = null;
     }
   }
 
-  function onPlayerStateChange(event) {
-    if (isRemoteAction) return;
-
-    const now = Date.now();
-    if (now - lastStateChangeTime < STATE_CHANGE_DEBOUNCE) return;
-    lastStateChangeTime = now;
-
-    const currentTime = player.getCurrentTime();
-
-    switch (event.data) {
-      case 1: // YT.PlayerState.PLAYING
-        sendData({ type: 'sync-play', time: currentTime });
-        break;
-
-      case 2: // YT.PlayerState.PAUSED
-        sendData({ type: 'sync-pause', time: currentTime });
-        break;
-
-      case 3: // YT.PlayerState.BUFFERING
-        // Detect seek
-        const timeDiff = Math.abs(currentTime - lastKnownTime);
-        if (timeDiff > SEEK_DETECT_THRESHOLD) {
-          sendData({ type: 'sync-seek', time: currentTime });
-        }
-        sendData({ type: 'buffering', name: userName });
-        break;
-    }
-
-    lastKnownTime = currentTime;
+  function showLoading() {
+    document.getElementById('player-loading')?.classList.remove('hidden');
   }
 
-  // ── Periodic time tracking for seek detection + drift correction ──
-  setInterval(() => {
-    if (!player || !playerReady) return;
-    try {
-      const state = player.getPlayerState();
-      if (state === 1) { // PLAYING
-        lastKnownTime = player.getCurrentTime();
+  function hideLoading() {
+    document.getElementById('player-loading')?.classList.add('hidden');
+  }
 
-        // Send time updates to partner for drift correction
+  function updateNowPlaying(meta) {
+    const title = document.getElementById('np-title');
+    const uploader = document.getElementById('np-uploader');
+    const thumb = document.getElementById('np-thumb');
+    if (title) title.textContent = meta.title || 'Now Playing';
+    if (uploader) uploader.textContent = meta.uploader || '';
+    if (thumb && meta.thumbnail) {
+      thumb.src = meta.thumbnail;
+      thumb.classList.remove('hidden');
+    }
+  }
+
+  setInterval(() => {
+    if (!cowatchPlayer || !playerReady) return;
+    try {
+      if (cowatchPlayer.isPlaying()) {
+        lastKnownTime = cowatchPlayer.getCurrentTime();
         sendData({
           type: 'time-update',
           time: lastKnownTime,
@@ -434,15 +453,43 @@
         });
       }
     } catch (e) { /* player not ready */ }
-  }, 4000);
+  }, 8000);
 
-  // ── Video Loading ──
-  function loadVideoById(videoId) {
+  async function loadVideoById(videoId, meta = {}, broadcast = false) {
     currentVideoId = videoId;
-    if (player && playerReady) {
-      player.loadVideoById(videoId);
-      hidePlaceholder();
+    currentVideoMeta = { ...meta };
+    showLoading();
+    hidePlaceholder();
+
+    try {
+      const loaded = await cowatchPlayer.loadVideo(videoId, meta);
+      currentVideoMeta = { ...currentVideoMeta, ...loaded };
+      playerReady = true;
+      updateNowPlaying(currentVideoMeta);
+
+      if (broadcast) {
+        sendData({
+          type: 'load-video',
+          videoId,
+          title: currentVideoMeta.title,
+          thumbnail: currentVideoMeta.thumbnail,
+          uploader: currentVideoMeta.uploader
+        });
+      }
+      return loaded;
+    } catch (err) {
+      hideLoading();
+      showNotification('Failed to load video: ' + err.message, 'error');
+      throw err;
     }
+  }
+
+  function playVideo(videoId, meta = {}) {
+    setRemoteAction();
+    loadVideoById(videoId, meta, true).then(() => {
+      cowatchPlayer.play();
+      showNotification('Playing ad-free! 🚫📺', 'success');
+    }).catch(() => {});
   }
 
   function extractVideoId(url) {
@@ -463,16 +510,20 @@
     if (!url) return;
 
     const videoId = extractVideoId(url);
-    if (!videoId) {
-      showNotification('Invalid YouTube URL! Try again.', 'error');
+    if (videoId) {
+      playVideo(videoId);
+      input.value = '';
       return;
     }
 
-    setRemoteAction();
-    loadVideoById(videoId);
-    sendData({ type: 'load-video', videoId });
-    input.value = '';
-    showNotification('Video loaded! 🎬', 'success');
+    if (url.length >= 2) {
+      YTBrowser.open();
+      YTBrowser.search(url);
+      input.value = '';
+      return;
+    }
+
+    showNotification('Enter a YouTube URL or search term', 'error');
   }
 
   function hidePlaceholder() {
@@ -517,7 +568,6 @@
     const localVideo = document.getElementById('local-video');
     localVideo.srcObject = localStream;
     document.getElementById('call-overlay').classList.add('active');
-    document.getElementById('local-video-container').classList.add('active');
   }
 
   async function initiateMediaCall() {
@@ -617,7 +667,6 @@
       minBtn.innerHTML = '<i class="ph ph-arrows-in-simple"></i>';
       minBtn.title = "Minimize Call";
     }
-    document.getElementById('local-video-container').classList.remove('active');
     document.getElementById('remote-video-container').classList.remove('active');
 
     const localVideo = document.getElementById('local-video');
@@ -669,6 +718,164 @@
       overlay.classList.remove('minimized');
       btn.innerHTML = '<i class="ph ph-arrows-in-simple"></i>';
       btn.title = "Minimize Call";
+    }
+  }
+
+  // ─── Draggable PiP ───
+  const PIP_POS_KEY = 'cowatch-pip-pos';
+
+  function initPipDrag() {
+    const pip = document.getElementById('call-overlay');
+    const dragHandle = document.getElementById('pip-drag-handle');
+    if (!pip || !dragHandle) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let moved = false;
+
+    restorePipPosition(pip);
+
+    function getBounds() {
+      const margin = 8;
+      const rect = pip.getBoundingClientRect();
+      return {
+        minX: margin,
+        minY: margin,
+        maxX: window.innerWidth - rect.width - margin,
+        maxY: window.innerHeight - rect.height - margin
+      };
+    }
+
+    function clampPosition(left, top) {
+      const bounds = getBounds();
+      return {
+        left: Math.max(bounds.minX, Math.min(bounds.maxX, left)),
+        top: Math.max(bounds.minY, Math.min(bounds.maxY, top))
+      };
+    }
+
+    function snapToEdge(left, top) {
+      const rect = pip.getBoundingClientRect();
+      const snap = 20;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      if (left < snap) left = 8;
+      else if (left + rect.width > vw - snap) left = vw - rect.width - 8;
+
+      if (top < snap) top = 8;
+      else if (top + rect.height > vh - snap) top = vh - rect.height - 8;
+
+      return clampPosition(left, top);
+    }
+
+    function applyPosition(left, top, animate) {
+      pip.style.left = left + 'px';
+      pip.style.top = top + 'px';
+      pip.style.right = 'auto';
+      pip.style.bottom = 'auto';
+      if (animate) {
+        pip.style.transition = 'left 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)';
+        setTimeout(() => { pip.style.transition = ''; }, 280);
+      }
+    }
+
+    function savePipPosition() {
+      const rect = pip.getBoundingClientRect();
+      try {
+        localStorage.setItem(PIP_POS_KEY, JSON.stringify({
+          left: rect.left,
+          top: rect.top
+        }));
+      } catch (e) {}
+    }
+
+    function onPointerDown(e) {
+      if (e.target.closest('.call-control-btn')) return;
+      if (!pip.classList.contains('active')) return;
+
+      dragging = true;
+      moved = false;
+      startX = e.clientX;
+      startY = e.clientY;
+
+      const rect = pip.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      pip.classList.add('dragging');
+      pip.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+
+    function onPointerMove(e) {
+      if (!dragging) return;
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+
+      const pos = clampPosition(startLeft + dx, startTop + dy);
+      applyPosition(pos.left, pos.top, false);
+    }
+
+    function onPointerUp(e) {
+      if (!dragging) return;
+      dragging = false;
+      pip.classList.remove('dragging');
+
+      try { pip.releasePointerCapture(e.pointerId); } catch (err) {}
+
+      const rect = pip.getBoundingClientRect();
+      const snapped = snapToEdge(rect.left, rect.top);
+      applyPosition(snapped.left, snapped.top, true);
+      savePipPosition();
+    }
+
+    pip.addEventListener('pointerdown', onPointerDown);
+    pip.addEventListener('pointermove', onPointerMove);
+    pip.addEventListener('pointerup', onPointerUp);
+    pip.addEventListener('pointercancel', onPointerUp);
+
+    // Prevent accidental click-through after drag on touch devices
+    pip.addEventListener('click', (e) => {
+      if (moved && !e.target.closest('.call-control-btn')) {
+        e.preventDefault();
+        e.stopPropagation();
+        moved = false;
+      }
+    }, true);
+
+    window.addEventListener('resize', () => {
+      if (!pip.classList.contains('active')) return;
+      const rect = pip.getBoundingClientRect();
+      const pos = clampPosition(rect.left, rect.top);
+      applyPosition(pos.left, pos.top, false);
+    });
+  }
+
+  function restorePipPosition(pip) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PIP_POS_KEY));
+      if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
+        pip.style.left = saved.left + 'px';
+        pip.style.top = saved.top + 'px';
+        pip.style.right = 'auto';
+        pip.style.bottom = 'auto';
+        return;
+      }
+    } catch (e) {}
+
+    // Default: bottom-right on mobile, top-right on desktop
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      pip.style.bottom = 'calc(72px + env(safe-area-inset-bottom))';
+      pip.style.right = '10px';
+      pip.style.top = 'auto';
+      pip.style.left = 'auto';
     }
   }
 
@@ -882,11 +1089,14 @@
   // ═══════════════════════════════════════════════════════
 
   function initUI() {
-    // ── Load Video ──
     document.getElementById('load-video-btn').addEventListener('click', handleLoadVideo);
     document.getElementById('video-url-input').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') handleLoadVideo();
     });
+
+    document.getElementById('browse-btn')?.addEventListener('click', () => YTBrowser.toggle());
+    document.getElementById('placeholder-browse-btn')?.addEventListener('click', () => YTBrowser.open());
+    document.getElementById('yt-close-btn')?.addEventListener('click', () => YTBrowser.close());
 
     // ── Call Controls ──
     document.getElementById('call-btn').addEventListener('click', () => {
@@ -906,6 +1116,8 @@
     document.getElementById('end-call-btn').addEventListener('click', endCall);
     document.getElementById('minimize-btn').addEventListener('click', toggleCallMinimization);
 
+    initPipDrag();
+
     // ── Chat ──
     document.getElementById('send-btn').addEventListener('click', sendChatMessage);
     document.getElementById('chat-input').addEventListener('keypress', (e) => {
@@ -920,9 +1132,8 @@
 
     // ── Page visibility: pause sync updates when tab is hidden ──
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && player && playerReady) {
-        // Tab became visible again, re-check time
-        lastKnownTime = player.getCurrentTime();
+      if (!document.hidden && cowatchPlayer && playerReady) {
+        lastKnownTime = cowatchPlayer.getCurrentTime();
       }
     });
 
