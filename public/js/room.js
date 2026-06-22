@@ -30,6 +30,7 @@
   let lastKnownTime = 0;
   let lastStateChangeTime = 0;
   let partnerName = 'Partner';
+  let isChatVisible = false; // Mobile: chat hidden by default
 
   // WebRTC / Call State
   let localStream = null;
@@ -44,10 +45,10 @@
 
   // ─── Constants ───
   const PEER_ID_PREFIX = 'cowatch-';
-  const DRIFT_THRESHOLD = 5.0;      // only hard-correct if >5s out of sync
-  const DRIFT_COOLDOWN = 20000;     // max one drift fix per 20s (stops seek loops)
-  const SYNC_PLAY_SEEK = 3.0;       // don't micro-seek on play
-  const STATE_CHANGE_DEBOUNCE = 250; // ms
+  const DRIFT_THRESHOLD = 8.0;      // only hard-correct if >8s out of sync (was 5)
+  const DRIFT_COOLDOWN = 45000;     // max one drift fix per 45s (stops seek loops)
+  const SYNC_PLAY_SEEK = 4.0;       // don't micro-seek on play (was 3)
+  const STATE_CHANGE_DEBOUNCE = 300; // ms
 
   // ═══════════════════════════════════════════════════════
   //  INITIALIZATION
@@ -220,11 +221,16 @@
         loadVideoById(data.videoId, {
           title: data.title,
           thumbnail: data.thumbnail,
-          uploader: data.uploader
+          uploader: data.uploader,
+          pickedBy: data.pickedBy
         }, false).then(() => {
           cowatchPlayer.play();
         });
-        showNotification('Partner loaded a video 🎬');
+        {
+          const who = data.pickedBy || partnerName;
+          showNotification(`${who} picked a video for the room 🎬`, 'success');
+          addSystemMessage(`🎬 ${who} started: ${data.title || 'a video'}`);
+        }
         break;
 
       case 'sync-play':
@@ -296,6 +302,7 @@
           timestamp: data.timestamp,
           isOwn: false
         });
+        notifyChatUnread();
         break;
 
       // ── Video Call Signaling ──
@@ -364,9 +371,11 @@
   function setRemoteAction() {
     isRemoteAction = true;
     if (remoteActionTimer) clearTimeout(remoteActionTimer);
+    // 3 seconds guard — must be longer than any buffer-wait that could fire
+    // play/pause/seek events after the remote action
     remoteActionTimer = setTimeout(() => {
       isRemoteAction = false;
-    }, 800);
+    }, 3000);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -412,8 +421,7 @@
 
     YTBrowser.init((videoId, meta) => {
       playVideo(videoId, meta);
-      YTBrowser.close();
-    });
+    }, { roomCode, userName });
 
     if (pendingState) {
       applySyncState(pendingState);
@@ -434,7 +442,10 @@
     const uploader = document.getElementById('np-uploader');
     const thumb = document.getElementById('np-thumb');
     if (title) title.textContent = meta.title || 'Now Playing';
-    if (uploader) uploader.textContent = meta.uploader || '';
+    if (uploader) {
+      const by = meta.pickedBy ? `Picked by ${meta.pickedBy}` : '';
+      uploader.textContent = by || meta.uploader || '';
+    }
     if (thumb && meta.thumbnail) {
       thumb.src = meta.thumbnail;
       thumb.classList.remove('hidden');
@@ -453,7 +464,7 @@
         });
       }
     } catch (e) { /* player not ready */ }
-  }, 8000);
+  }, 12000);  // Every 12s (was 8s — less frequent = fewer drift corrections)
 
   async function loadVideoById(videoId, meta = {}, broadcast = false) {
     currentVideoId = videoId;
@@ -473,8 +484,10 @@
           videoId,
           title: currentVideoMeta.title,
           thumbnail: currentVideoMeta.thumbnail,
-          uploader: currentVideoMeta.uploader
+          uploader: currentVideoMeta.uploader,
+          pickedBy: userName
         });
+        addSystemMessage(`🎬 You started: ${currentVideoMeta.title || 'a video'}`);
       }
       return loaded;
     } catch (err) {
@@ -488,7 +501,8 @@
     setRemoteAction();
     loadVideoById(videoId, meta, true).then(() => {
       cowatchPlayer.play();
-      showNotification('Playing ad-free! 🚫📺', 'success');
+      showNotification('Playing for everyone in the room! 🎬', 'success');
+      YTBrowser.close();
     }).catch(() => {});
   }
 
@@ -871,9 +885,9 @@
     } catch (e) {}
 
     // Default: bottom-right on mobile, top-right on desktop
-    if (window.matchMedia('(max-width: 900px)').matches) {
-      pip.style.bottom = 'calc(72px + env(safe-area-inset-bottom))';
-      pip.style.right = '10px';
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      pip.style.bottom = 'calc(16px + env(safe-area-inset-bottom))';
+      pip.style.right = '12px';
       pip.style.top = 'auto';
       pip.style.left = 'auto';
     }
@@ -1033,6 +1047,53 @@
   function updateRoomInfo() {
     document.getElementById('room-code').textContent = roomCode;
     document.title = `CoWatch — Room ${roomCode}`;
+    if (window.YTBrowser) {
+      YTBrowser.setContext({ roomCode, userName });
+    }
+  }
+
+  function showRoomWelcome() {
+    if (sessionStorage.getItem('cowatch-welcome-dismissed')) return;
+    const overlay = document.getElementById('room-welcome');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+  }
+
+  function dismissRoomWelcome() {
+    sessionStorage.setItem('cowatch-welcome-dismissed', '1');
+    document.getElementById('room-welcome')?.classList.add('hidden');
+  }
+
+  // ─── Mobile Chat Toggle ───
+  function toggleChat() {
+    const chatSection = document.getElementById('chat-section');
+    const toggleBtn = document.getElementById('chat-toggle-btn');
+    if (!chatSection) return;
+
+    isChatVisible = !isChatVisible;
+    chatSection.classList.toggle('mobile-hidden', !isChatVisible);
+
+    if (toggleBtn) {
+      toggleBtn.classList.remove('has-unread');
+      if (isChatVisible) {
+        toggleBtn.innerHTML = '<i class="ph ph-x"></i>';
+        // Auto-scroll to bottom when opening
+        const msgs = document.getElementById('chat-messages');
+        if (msgs) msgs.scrollTop = msgs.scrollHeight;
+        // Focus chat input
+        setTimeout(() => document.getElementById('chat-input')?.focus(), 100);
+      } else {
+        toggleBtn.innerHTML = '<i class="ph ph-chat-dots"></i>';
+      }
+    }
+  }
+
+  function notifyChatUnread() {
+    // Only show unread dot if chat is hidden on mobile
+    if (isChatVisible) return;
+    if (window.innerWidth >= 768) return; // Desktop always shows chat
+    const toggleBtn = document.getElementById('chat-toggle-btn');
+    if (toggleBtn) toggleBtn.classList.add('has-unread');
   }
 
   function copyRoomLink() {
@@ -1095,8 +1156,21 @@
     });
 
     document.getElementById('browse-btn')?.addEventListener('click', () => YTBrowser.toggle());
-    document.getElementById('placeholder-browse-btn')?.addEventListener('click', () => YTBrowser.open());
+    document.getElementById('placeholder-browse-btn')?.addEventListener('click', () => {
+      dismissRoomWelcome();
+      YTBrowser.open();
+    });
     document.getElementById('yt-close-btn')?.addEventListener('click', () => YTBrowser.close());
+    document.getElementById('welcome-open-yt')?.addEventListener('click', () => {
+      dismissRoomWelcome();
+      YTBrowser.open();
+    });
+    document.getElementById('welcome-skip')?.addEventListener('click', dismissRoomWelcome);
+
+    showRoomWelcome();
+
+    // ── Mobile Chat Toggle ──
+    document.getElementById('chat-toggle-btn')?.addEventListener('click', toggleChat);
 
     // ── Call Controls ──
     document.getElementById('call-btn').addEventListener('click', () => {

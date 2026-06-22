@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#06060f">
   <title>CoWatch — Room</title>
   <meta name="description" content="Watch YouTube together ad-free in perfect sync with video calling.">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -27,9 +28,9 @@
       </div>
     </div>
     <div class="header-right">
-      <button id="browse-btn" class="header-btn browse-btn" title="Browse YouTube">
-        <i class="ph ph-compass"></i>
-        <span>Browse</span>
+      <button id="browse-btn" class="header-btn browse-btn yt-open-btn" title="Open YouTube">
+        <i class="ph ph-youtube-logo"></i>
+        <span>YouTube</span>
       </button>
       <button id="copy-link-btn" class="header-btn" title="Copy invite link">
         <i class="ph ph-link"></i>
@@ -38,6 +39,9 @@
       <button id="call-btn" class="header-btn call-btn" title="Start Video Call">
         <i class="ph ph-video-camera"></i>
         <span>Call</span>
+      </button>
+      <button id="chat-toggle-btn" class="header-btn chat-toggle-btn" title="Toggle Chat">
+        <i class="ph ph-chat-dots"></i>
       </button>
       <div class="user-count">
         <i class="ph ph-users"></i>
@@ -64,10 +68,10 @@
         <div class="player-placeholder" id="player-placeholder">
           <div class="placeholder-glow"></div>
           <i class="ph ph-youtube-logo"></i>
-          <h2>Your ad-free theater awaits</h2>
-          <p>Browse YouTube, sign in to your account, pick any video — synced instantly with your partner. Zero ads. 🚫</p>
+          <h2>Ready to watch together?</h2>
+          <p>Open YouTube, sign in with <strong>your own</strong> account, pick any video — everyone in the room watches in sync. Zero ads.</p>
           <button class="placeholder-cta" id="placeholder-browse-btn" type="button">
-            <i class="ph ph-compass"></i> Open YouTube Browser
+            <i class="ph ph-youtube-logo"></i> Open YouTube
           </button>
         </div>
 
@@ -88,44 +92,64 @@
         </div>
       </div>
 
-      <!-- YouTube Browser Panel -->
+      <!-- Full-screen YouTube (per-user login, anyone picks → all watch) -->
       <div class="yt-browser" id="yt-browser">
+        <div class="yt-browser-top">
+          <div class="yt-browser-brand">
+            <i class="ph ph-youtube-logo"></i>
+            <div>
+              <strong>YouTube</strong>
+              <span class="yt-room-hint">Room <span id="yt-room-code">------</span></span>
+            </div>
+          </div>
+          <button class="yt-close-btn" id="yt-close-btn" type="button" title="Close YouTube">
+            <i class="ph ph-x"></i>
+            <span>Back to room</span>
+          </button>
+        </div>
+
+        <div class="yt-room-banner">
+          <i class="ph ph-play-circle"></i>
+          <p><strong>Search or browse</strong> for any video below. <strong>Anyone</strong> in the room can pick a video — <strong>all watch together</strong>, ad-free & in perfect sync.</p>
+        </div>
+
         <div class="yt-browser-header">
           <div class="yt-search-bar">
             <i class="ph ph-magnifying-glass"></i>
-            <input type="text" id="yt-search-input" placeholder="Search YouTube..." autocomplete="off">
+            <input type="text" id="yt-search-input" placeholder="Search for any video — no login needed..." autocomplete="off">
           </div>
-          <button class="yt-close-btn" id="yt-close-btn" type="button" title="Close">
-            <i class="ph ph-x"></i>
+        </div>
+
+        <div class="yt-auth-row">
+          <button id="yt-login-btn" class="yt-login-btn" type="button">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" width="18" height="18">
+            Sign in with your Google account
           </button>
+          <div id="yt-user-bar" class="yt-user-bar" style="display:none">
+            <img src="" alt="" width="32" height="32">
+            <div class="yt-user-info">
+              <span class="yt-user-name">You</span>
+              <span class="yt-user-hint">Your personal library</span>
+            </div>
+            <button id="yt-logout-btn" class="yt-logout-btn" type="button">Sign out</button>
+          </div>
         </div>
 
         <div class="yt-tabs">
           <button class="yt-tab active" data-tab="discover" type="button">
-            <i class="ph ph-fire"></i> Trending
+            <i class="ph ph-house"></i> Home
           </button>
           <button class="yt-tab" data-tab="search" type="button">
             <i class="ph ph-magnifying-glass"></i> Search
           </button>
           <button class="yt-tab" data-tab="library" type="button">
-            <i class="ph ph-books"></i> My Library
+            <i class="ph ph-user-circle"></i> My Account
           </button>
         </div>
 
-        <div id="yt-user-bar" class="yt-user-bar" style="display:none">
-          <img src="" alt="" width="28" height="28">
-          <span class="yt-user-name">You</span>
-          <button id="yt-logout-btn" class="yt-logout-btn" type="button">Sign out</button>
-        </div>
-
-        <button id="yt-login-btn" class="yt-login-btn" type="button">
-          <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" width="18" height="18">
-          Sign in with Google for your subscriptions & playlists
-        </button>
-
-        <div id="yt-login-prompt" class="yt-login-prompt" style="display:none">
+        <div id="yt-login-prompt" class="yt-login-prompt">
           <i class="ph ph-lock-key"></i>
-          <p>Sign in to access your YouTube subscriptions, playlists & liked videos</p>
+          <p>Sign in above to see <strong>your</strong> subscriptions, playlists & liked videos. Each person in the room uses their own account.</p>
         </div>
 
         <div class="yt-panels">
@@ -149,9 +173,14 @@
 
         <div class="yt-browser-toast" id="yt-browser-toast"></div>
       </div>
+
+      <button class="yt-fab" id="yt-fab" type="button" title="Open YouTube">
+        <i class="ph ph-youtube-logo"></i>
+        <span>YouTube</span>
+      </button>
     </div>
 
-    <aside class="chat-section">
+    <aside class="chat-section mobile-hidden" id="chat-section">
       <div class="chat-header">
         <h3><i class="ph ph-chat-dots"></i> Live Chat</h3>
       </div>
@@ -169,6 +198,19 @@
       </div>
     </aside>
   </main>
+
+  <!-- Room welcome — Open YouTube CTA -->
+  <div class="room-welcome-overlay hidden" id="room-welcome">
+    <div class="room-welcome-card">
+      <div class="room-welcome-icon"><i class="ph ph-youtube-logo"></i></div>
+      <h2>You're in the room!</h2>
+      <p>Everyone can sign in with <strong>their own</strong> YouTube account, pick any video, and the whole room watches together — synced & ad-free.</p>
+      <button class="placeholder-cta" id="welcome-open-yt" type="button">
+        <i class="ph ph-youtube-logo"></i> Open YouTube
+      </button>
+      <button class="room-welcome-skip" id="welcome-skip" type="button">Skip for now</button>
+    </div>
+  </div>
 
   <div id="call-overlay" class="call-pip" aria-label="Partner video call">
     <div class="pip-frame">
@@ -211,4 +253,3 @@
   <script src="/js/room.js"></script>
 </body>
 </html>
-

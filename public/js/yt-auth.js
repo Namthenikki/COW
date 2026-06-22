@@ -180,12 +180,22 @@ window.YTAuth = (function () {
     return profile || getStored()?.profile;
   }
 
+  async function isConfigured() {
+    try {
+      const cfg = await loadConfig();
+      return !!cfg.authEnabled;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     loadConfig,
     login,
     handleCallback,
     logout,
     isLoggedIn,
+    isConfigured,
     getProfile,
     fetchProfile,
     getSubscriptions,

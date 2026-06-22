@@ -1,24 +1,47 @@
-/* CoWatch — In-Room YouTube Browser (ad-free) */
+/* CoWatch — In-Room YouTube (individual login, anyone picks → all watch) */
 window.YTBrowser = (function () {
   'use strict';
 
   let onSelectVideo = null;
   let currentTab = 'discover';
   let searchTimer = null;
+  let roomCode = '';
+  let userName = '';
+  let authEnabled = false; // Whether OAuth is configured on the server
 
-  function init(selectCallback) {
+  function init(selectCallback, context = {}) {
     onSelectVideo = selectCallback;
+    roomCode = context.roomCode || '';
+    userName = context.userName || 'Guest';
     bindTabs();
     bindSearch();
     bindAuth();
+    bindFab();
     loadDiscover();
+    updateRoomCode();
 
     window.addEventListener('message', (e) => {
       if (e.data?.type === 'cowatch-auth-success') {
         updateAuthUI();
         if (currentTab === 'library') loadLibrary();
+        showBrowserToast('Signed in! Your library is ready.');
       }
     });
+  }
+
+  function setContext(ctx) {
+    roomCode = ctx.roomCode || roomCode;
+    userName = ctx.userName || userName;
+    updateRoomCode();
+  }
+
+  function updateRoomCode() {
+    const el = document.getElementById('yt-room-code');
+    if (el) el.textContent = roomCode || '------';
+  }
+
+  function bindFab() {
+    document.getElementById('yt-fab')?.addEventListener('click', () => open());
   }
 
   function bindTabs() {
@@ -70,18 +93,49 @@ window.YTBrowser = (function () {
       YTAuth.logout();
       updateAuthUI();
       loadLibrary();
+      showBrowserToast('Signed out');
     });
 
+    // Check if OAuth is configured on the server
+    checkAuthConfig();
+  }
+
+  async function checkAuthConfig() {
+    try {
+      authEnabled = await YTAuth.isConfigured();
+    } catch {
+      authEnabled = false;
+    }
     updateAuthUI();
   }
 
   async function updateAuthUI() {
     const loginBtn = document.getElementById('yt-login-btn');
     const userBar = document.getElementById('yt-user-bar');
+    const loginPrompt = document.getElementById('yt-login-prompt');
+    const authRow = document.querySelector('.yt-auth-row');
+    const libraryTab = document.querySelector('.yt-tab[data-tab="library"]');
+
+    // If OAuth is not configured, hide all auth UI
+    if (!authEnabled) {
+      if (loginBtn) loginBtn.style.display = 'none';
+      if (loginPrompt) loginPrompt.style.display = 'none';
+      if (userBar) userBar.style.display = 'none';
+      if (authRow) authRow.style.display = 'none';
+      // Rename "My Account" tab to indicate it's unavailable or hide it
+      if (libraryTab) {
+        libraryTab.innerHTML = '<i class="ph ph-user-circle"></i> Library';
+        libraryTab.title = 'Set up Google OAuth to use your library';
+      }
+      return;
+    }
+
     const loggedIn = await YTAuth.isLoggedIn();
     const profile = loggedIn ? await YTAuth.fetchProfile() : null;
 
-    if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : '';
+    if (authRow) authRow.style.display = '';
+    if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : 'flex';
+    if (loginPrompt) loginPrompt.style.display = loggedIn ? 'none' : 'flex';
     if (userBar) {
       userBar.style.display = loggedIn ? 'flex' : 'none';
       if (profile) {
@@ -97,7 +151,7 @@ window.YTBrowser = (function () {
     if (!el) return;
     el.textContent = msg;
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 3000);
+    setTimeout(() => el.classList.remove('show'), 3500);
   }
 
   function setLoading(panelId, loading) {
@@ -116,11 +170,14 @@ window.YTBrowser = (function () {
     }
 
     el.innerHTML = videos.map((v) => `
-      <button class="yt-card" data-vid="${v.videoId}" type="button">
+      <button class="yt-card" data-vid="${v.videoId}" type="button" aria-label="Play ${escapeHTML(v.title)} for everyone">
         <div class="yt-card-thumb">
           <img src="${v.thumbnail}" alt="" loading="lazy">
           ${v.duration ? `<span class="yt-card-dur">${PipedClient.formatDuration(v.duration)}</span>` : ''}
-          <div class="yt-card-play"><i class="ph ph-play-fill"></i></div>
+          <div class="yt-card-play">
+            <i class="ph ph-play-fill"></i>
+            <span>Play for room</span>
+          </div>
         </div>
         <div class="yt-card-info">
           <h4>${escapeHTML(v.title)}</h4>
@@ -134,7 +191,10 @@ window.YTBrowser = (function () {
       card.addEventListener('click', () => {
         const videoId = card.dataset.vid;
         const title = card.querySelector('h4')?.textContent;
-        onSelectVideo?.(videoId, { title, thumbnail: card.querySelector('img')?.src });
+        const thumbnail = card.querySelector('img')?.src;
+        const uploader = card.querySelector('.yt-card-info p')?.textContent;
+        showBrowserToast(`Playing for everyone in the room…`);
+        onSelectVideo?.(videoId, { title, thumbnail, uploader, pickedBy: userName });
       });
     });
   }
@@ -176,6 +236,21 @@ window.YTBrowser = (function () {
     const playlistsEl = document.getElementById('yt-playlists-grid');
     const likedEl = document.getElementById('yt-liked-grid');
     const loginPrompt = document.getElementById('yt-login-prompt');
+
+    // If OAuth is not configured, show a helpful message
+    if (!authEnabled) {
+      if (subsEl) subsEl.innerHTML = '';
+      if (playlistsEl) playlistsEl.innerHTML = '';
+      if (likedEl) likedEl.innerHTML = `
+        <div class="yt-empty">
+          <i class="ph ph-lock-key"></i>
+          <p>YouTube login requires Google OAuth setup on the server.<br>
+          <strong>You can still search and play any video!</strong><br>
+          Use the Search tab or Home tab to find videos.</p>
+        </div>`;
+      if (loginPrompt) loginPrompt.style.display = 'none';
+      return;
+    }
 
     const loggedIn = await YTAuth.isLoggedIn();
     if (loginPrompt) loginPrompt.style.display = loggedIn ? 'none' : 'flex';
@@ -254,16 +329,31 @@ window.YTBrowser = (function () {
     }
   }
 
+  function _updateFab() {
+    const fab = document.getElementById('yt-fab');
+    const browser = document.getElementById('yt-browser');
+    if (!fab || !browser) return;
+    fab.classList.toggle('hidden', browser.classList.contains('open'));
+  }
+
   function toggle() {
-    document.getElementById('yt-browser')?.classList.toggle('open');
+    const browser = document.getElementById('yt-browser');
+    if (browser?.classList.contains('open')) close();
+    else open();
   }
 
   function open() {
-    document.getElementById('yt-browser')?.classList.add('open');
+    const browser = document.getElementById('yt-browser');
+    browser?.classList.add('open');
+    document.body.classList.add('yt-open');
+    _updateFab();
+    document.getElementById('yt-search-input')?.focus();
   }
 
   function close() {
     document.getElementById('yt-browser')?.classList.remove('open');
+    document.body.classList.remove('yt-open');
+    _updateFab();
   }
 
   function escapeHTML(str) {
@@ -272,5 +362,5 @@ window.YTBrowser = (function () {
     return div.innerHTML;
   }
 
-  return { init, toggle, open, close, search, loadDiscover };
+  return { init, setContext, toggle, open, close, search, loadDiscover };
 })();

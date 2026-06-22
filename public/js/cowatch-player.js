@@ -3,8 +3,9 @@ window.CowatchPlayer = (function () {
   'use strict';
 
   const BUFFER_RATIO = 0.10;   // always keep 10% ahead
-  const BUFFER_MIN_SEC = 15;   // minimum 15s ahead for short videos
-  const BUFFER_TIMEOUT = 90000;
+  const BUFFER_MIN_SEC = 8;    // minimum 8s ahead (reduced from 15 to prevent stall loops)
+  const BUFFER_TIMEOUT = 60000;
+  const STALL_COOLDOWN = 3000; // minimum 3s between stall recoveries
 
   function CowatchPlayer(videoEl, controlsEl) {
     this.video = videoEl;
@@ -16,10 +17,11 @@ window.CowatchPlayer = (function () {
     this._volume = 1;
     this._callbacks = {};
     this._seeking = false;
-    this._internal = false;
+    this._internal = false;  // When true, suppress all sync events
     this._recovering = false;
     this._hls = null;
     this._bufferWatch = null;
+    this._lastStallTime = 0;
     this._initControls();
     this._bindEvents();
     this._startBufferWatch();
@@ -95,7 +97,10 @@ window.CowatchPlayer = (function () {
 
     this.video.addEventListener('play', () => {
       this._updatePlayBtn(true);
-      if (!this._internal) this._emit('play', { time: this.getCurrentTime() });
+      // Only emit sync events if NOT an internal action (stall recovery, remote seek, etc.)
+      if (!this._internal && !this._recovering) {
+        this._emit('play', { time: this.getCurrentTime() });
+      }
     });
 
     this.video.addEventListener('pause', () => {
@@ -106,7 +111,9 @@ window.CowatchPlayer = (function () {
     });
 
     this.video.addEventListener('seeked', () => {
-      if (!this._internal) this._emit('seeked', { time: this.getCurrentTime() });
+      if (!this._internal && !this._recovering) {
+        this._emit('seeked', { time: this.getCurrentTime() });
+      }
     });
 
     this.video.addEventListener('waiting', () => this._onStall());
@@ -143,34 +150,39 @@ window.CowatchPlayer = (function () {
 
   CowatchPlayer.prototype.hasEnoughBuffer = function () {
     if (this.isFullyBuffered()) return true;
-    return this.getBufferedAhead() >= this._bufferTargetSec();
+    // More lenient: just need 2s ahead to play
+    return this.getBufferedAhead() >= 2;
   };
 
   CowatchPlayer.prototype.waitForBuffer = function (atTime) {
     return new Promise((resolve, reject) => {
       const start = Date.now();
-      const target = this._bufferTargetSec();
+      // Reduced target: just need 3s ahead to start playing
+      const minBuffer = 3;
 
       const tick = () => {
         if (Date.now() - start > BUFFER_TIMEOUT) {
-          reject(new Error('Buffer timeout'));
+          // Timeout — just play anyway, don't keep waiting
+          resolve();
           return;
         }
 
-        if (atTime != null && Math.abs(this.video.currentTime - atTime) > 0.25) {
+        // Don't keep re-seeking — only nudge once if way off
+        if (atTime != null && Math.abs(this.video.currentTime - atTime) > 1) {
           this._internal = true;
           this.video.currentTime = atTime;
           this._internal = false;
         }
 
-        if (this.hasEnoughBuffer()) {
+        const ahead = this.getBufferedAhead();
+        if (ahead >= minBuffer || this.isFullyBuffered()) {
           resolve();
           return;
         }
 
         // Nudge browser to keep downloading
         if (this.video.preload !== 'auto') this.video.preload = 'auto';
-        setTimeout(tick, 150);
+        setTimeout(tick, 300);
       };
 
       tick();
@@ -179,9 +191,16 @@ window.CowatchPlayer = (function () {
 
   CowatchPlayer.prototype._onStall = function () {
     if (this._recovering) return;
+    
+    // Stall cooldown — prevent rapid stall loops
+    const now = Date.now();
+    if (now - this._lastStallTime < STALL_COOLDOWN) return;
+    this._lastStallTime = now;
+    
     this._recovering = true;
     const wasPlaying = !this.video.paused;
 
+    // Pause internally (no sync event emitted because _recovering is true)
     this._internal = true;
     this.video.pause();
     this._internal = false;
@@ -190,21 +209,30 @@ window.CowatchPlayer = (function () {
 
     this.waitForBuffer(this.video.currentTime)
       .then(() => {
-        if (wasPlaying) return this.play(true);
+        if (wasPlaying) {
+          // Resume internally — _recovering flag suppresses sync events
+          this._internal = true;
+          return this.video.play().catch(() => {});
+        }
       })
       .catch(() => {})
-      .finally(() => { this._recovering = false; });
+      .finally(() => {
+        this._internal = false;
+        this._recovering = false;
+      });
   };
 
   CowatchPlayer.prototype._startBufferWatch = function () {
+    // Check buffer every 2s (was 500ms — way too aggressive, caused stall loops)
     this._bufferWatch = setInterval(() => {
       if (!this.ready || this.video.paused || this._recovering) return;
       const ahead = this.getBufferedAhead();
-      const target = this._bufferTargetSec();
-      if (ahead < target * 0.5 && !this.isFullyBuffered()) {
+      // Only trigger stall if buffer is truly empty (< 0.5s)
+      // This prevents premature pausing when buffer is still reasonable
+      if (ahead < 0.5 && !this.isFullyBuffered()) {
         this._onStall();
       }
-    }, 500);
+    }, 2000);
   };
 
   CowatchPlayer.prototype._updateBufferTargetMarker = function () {
@@ -263,9 +291,13 @@ window.CowatchPlayer = (function () {
 
   CowatchPlayer.prototype.play = async function (skipBufferCheck) {
     if (!skipBufferCheck) {
-      await this.waitForBuffer(this.getCurrentTime());
+      // Light buffer check — just need 2s, don't block forever
+      const ahead = this.getBufferedAhead();
+      if (ahead < 1 && !this.isFullyBuffered()) {
+        await this.waitForBuffer(this.getCurrentTime());
+      }
     }
-    return this.video.play();
+    return this.video.play().catch(() => {});
   };
 
   CowatchPlayer.prototype.pause = function () {
@@ -283,7 +315,8 @@ window.CowatchPlayer = (function () {
   CowatchPlayer.prototype.seekTo = function (time, opts) {
     const options = typeof opts === 'object' ? opts : { silent: opts === true };
     const silent = options.silent || false;
-    const waitBuffer = options.waitBuffer !== false;
+    // Default waitBuffer to FALSE for remote seeks to prevent loops
+    const waitBuffer = options.waitBuffer === true;
 
     const t = Math.max(0, Math.min(time, this.video.duration || time));
     this._internal = true;
@@ -292,10 +325,14 @@ window.CowatchPlayer = (function () {
 
     if (!silent) this._emit('seeked', { time: t });
 
+    // Only wait for buffer if explicitly requested (user-initiated seeks)
     if (waitBuffer) {
+      this._internal = true;
       this.waitForBuffer(t).then(() => {
         if (!this.video.paused) this.video.play().catch(() => {});
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => {
+        this._internal = false;
+      });
     }
   };
 
@@ -339,104 +376,55 @@ window.CowatchPlayer = (function () {
   CowatchPlayer.prototype._attachSource = function (url, stream) {
     this._destroyHls();
 
-    if (stream.type === 'hls' && window.Hls?.isSupported()) {
+    if (stream.type === 'hls' && window.Hls && Hls.isSupported()) {
       this._hls = new Hls({
-        maxBufferLength: 60,
-        maxMaxBufferLength: 120,
-        maxBufferSize: 80 * 1000 * 1000,
-        maxBufferHole: 0.5,
-        enableWorker: true
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        startLevel: -1
       });
       this._hls.loadSource(url);
       this._hls.attachMedia(this.video);
-      return 'hls';
+      return new Promise((resolve, reject) => {
+        this._hls.on(Hls.Events.MANIFEST_PARSED, () => resolve());
+        this._hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) reject(new Error('HLS fatal error'));
+        });
+      });
     }
 
     this.video.src = url;
-    return 'progressive';
+    return new Promise((resolve) => {
+      this.video.addEventListener('canplay', resolve, { once: true });
+      this.video.load();
+    });
   };
 
-  CowatchPlayer.prototype.loadVideo = async function (videoId, meta = {}) {
-    this.ready = false;
+  CowatchPlayer.prototype.loadVideo = async function (videoId, meta) {
     this.currentVideoId = videoId;
-    this.meta = meta;
-    this._destroyHls();
+    this.meta = { ...meta };
+    this.ready = false;
+    this._recovering = false;
+    this._lastStallTime = 0;
 
-    const data = await PipedClient.streams(videoId);
-    const stream = PipedClient.pickStream(data);
+    const streams = await PipedClient.streams(videoId);
+    const stream = PipedClient.pickStream(streams);
 
-    this.meta = {
-      ...meta,
-      title: data.title || meta.title,
-      uploader: data.uploader || meta.uploader,
-      thumbnail: data.thumbnailUrl || meta.thumbnail,
-      duration: data.duration,
-      views: data.views
-    };
+    this.meta.title = this.meta.title || streams.title;
+    this.meta.uploader = this.meta.uploader || streams.uploader;
+    this.meta.thumbnail = this.meta.thumbnail || streams.thumbnailUrl;
+    this.meta.duration = streams.duration;
 
     if (this.el?.quality) {
       this.el.quality.textContent = stream.quality || 'HD';
     }
 
-    const urls = [stream.url, stream.proxyUrl].filter(Boolean);
+    // Use proxy URL to avoid CORS
+    await this._attachSource(stream.proxyUrl || stream.url, stream);
 
-    let lastErr;
-    for (const url of urls) {
-      try {
-        await this._loadUrl(url, stream);
-        this._emit('loaded', this.meta);
-        return this.meta;
-      } catch (e) {
-        lastErr = e;
-        this.video.removeAttribute('src');
-        this.video.load();
-      }
-    }
-    throw lastErr || new Error('Failed to load video stream');
-  };
-
-  CowatchPlayer.prototype._loadUrl = function (url, stream) {
-    return new Promise((resolve, reject) => {
-      const onMeta = async () => {
-        cleanup();
-        try {
-          this.video.preload = 'auto';
-          this.video.currentTime = 0;
-          await this.waitForBuffer(0);
-          this.ready = true;
-          resolve();
-        } catch (e) {
-          reject(e);
-        }
-      };
-
-      const onErr = () => {
-        cleanup();
-        reject(new Error('Stream failed'));
-      };
-
-      const cleanup = () => {
-        this.video.removeEventListener('loadedmetadata', onMeta);
-        this.video.removeEventListener('error', onErr);
-        if (this._hls) {
-          this._hls.off(Hls.Events.MANIFEST_PARSED, onMeta);
-          this._hls.off(Hls.Events.ERROR, onErr);
-        }
-      };
-
-      const mode = this._attachSource(url, stream);
-
-      if (mode === 'hls') {
-        this._hls.on(Hls.Events.MANIFEST_PARSED, onMeta);
-        this._hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) onErr();
-        });
-      } else {
-        this.video.addEventListener('loadedmetadata', onMeta);
-        this.video.addEventListener('error', onErr);
-        this.video.load();
-      }
-    });
+    this.ready = true;
+    this._updateBufferTargetMarker();
+    this._emit('loaded', this.meta);
+    return this.meta;
   };
 
   return CowatchPlayer;

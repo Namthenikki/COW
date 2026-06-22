@@ -12,15 +12,31 @@ const { URL } = require('url');
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Load .env file if it exists (no npm dependencies needed)
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    envContent.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+        if (!process.env[key]) process.env[key] = val;
+      }
+    });
+    console.log('  📄  Loaded .env file');
+  }
+} catch (e) { /* no .env file, that's fine */ }
+
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 
-const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.moomoo.me',
-  'https://pipedapi.syncpundit.io',
-  'https://piped-api.lunar.icu',
-  'https://pipedapi.leptons.xyz'
+// Working Piped instances — auto-refreshed from official list
+let pipedInstances = [
+  'https://api.piped.private.coffee'  // Known working as of now
 ];
 
 const MIME_TYPES = {
@@ -35,13 +51,44 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2'
 };
 
+// Dynamically fetch working Piped instances from official registry
+async function refreshPipedInstances() {
+  try {
+    const res = await fetchRemote('https://piped-instances.kavin.rocks/');
+    if (res.status === 200) {
+      const list = JSON.parse(res.body.toString('utf8'));
+      // Sort by uptime, pick instances with >90% uptime
+      const good = list
+        .filter(i => i.api_url && (i.uptime_24h || 0) > 90)
+        .sort((a, b) => (b.uptime_24h || 0) - (a.uptime_24h || 0))
+        .map(i => i.api_url.replace(/\/$/, ''));
+      if (good.length > 0) {
+        pipedInstances = good;
+        console.log(`  ✅  Loaded ${good.length} Piped instance(s): ${good[0]}`);
+      }
+    }
+  } catch (e) {
+    console.log(`  ⚠️  Could not refresh Piped instances: ${e.message}`);
+  }
+}
+
+// Refresh on startup and every 30 minutes
+refreshPipedInstances();
+setInterval(refreshPipedInstances, 30 * 60 * 1000);
+
 async function pipedFetch(apiPath) {
   let lastErr;
-  for (const base of PIPED_INSTANCES) {
+  for (const base of pipedInstances) {
     try {
       const res = await fetchRemote(base + apiPath);
       if (res.status >= 200 && res.status < 300) {
-        return JSON.parse(res.body.toString('utf8'));
+        const text = res.body.toString('utf8');
+        // Skip instances that return shutdown messages
+        if (text.includes('shutdown') || text.includes('Shutdown')) {
+          lastErr = new Error(`Instance ${base} is shut down`);
+          continue;
+        }
+        return JSON.parse(text);
       }
       lastErr = new Error(`HTTP ${res.status} from ${base}`);
     } catch (e) {
@@ -296,7 +343,8 @@ function serveStatic(req, res, urlPath) {
 
     res.writeHead(200, {
       'Content-Type': contentType,
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600'
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache'
     });
     res.end(data);
   });
