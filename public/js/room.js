@@ -506,16 +506,39 @@
     }).catch(() => {});
   }
 
-  function extractVideoId(url) {
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/|youtube\.com\/live\/)([^&\s?#]+)/,
-      /^([a-zA-Z0-9_-]{11})$/
-    ];
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) return match[1];
-    }
-    return null;
+  function extractVideoId(input) {
+    const value = input.trim();
+    const rawId = value.match(/^[a-zA-Z0-9_-]{11}$/);
+    if (rawId) return rawId[0];
+
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(value)
+      ? value
+      : `https://${value}`;
+
+    try {
+      const parsed = new URL(withProtocol);
+      const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+
+      if (host === 'youtu.be') {
+        return parsed.pathname.split('/').filter(Boolean)[0] || null;
+      }
+
+      if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com' || host === 'youtube-nocookie.com') {
+        const fromQuery = parsed.searchParams.get('v');
+        if (fromQuery && /^[a-zA-Z0-9_-]{11}$/.test(fromQuery)) return fromQuery;
+
+        const parts = parsed.pathname.split('/').filter(Boolean);
+        const knownPrefixes = ['embed', 'shorts', 'live', 'v'];
+        const prefixIndex = parts.findIndex((part) => knownPrefixes.includes(part));
+        if (prefixIndex >= 0 && parts[prefixIndex + 1]) {
+          const id = parts[prefixIndex + 1];
+          if (/^[a-zA-Z0-9_-]{11}$/.test(id)) return id;
+        }
+      }
+    } catch { /* fall back to regex below */ }
+
+    const match = value.match(/(?:v=|\/embed\/|\/shorts\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    return match?.[1] || null;
   }
 
   function handleLoadVideo() {
