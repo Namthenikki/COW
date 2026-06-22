@@ -1,0 +1,15 @@
+{
+  "name": "cowatch",
+  "version": "1.0.0",
+  "description": "Watch YouTube together with perfect sync and built-in video calling",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "socket.io": "^4.7.5",
+    "uuid": "^10.0.0"
+  }
+}

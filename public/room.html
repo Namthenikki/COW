@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoWatch — Room</title>
+  <meta name="description" content="Watch YouTube together in perfect sync with video calling.">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="room-page">
+  <!-- Notifications -->
+  <div id="notifications" class="notifications"></div>
+
+  <!-- Header -->
+  <header class="room-header">
+    <div class="header-left">
+      <a href="/" class="logo">
+        <div class="logo-icon">▶</div>
+        <span class="logo-text">CoWatch</span>
+      </a>
+      <div class="room-info">
+        <span class="room-badge">
+          <i class="ph ph-hash"></i>
+          <span id="room-code">------</span>
+        </span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button id="copy-link-btn" class="header-btn" title="Copy invite link">
+        <i class="ph ph-link"></i>
+        <span>Share</span>
+      </button>
+      <button id="call-btn" class="header-btn call-btn" title="Start Video Call">
+        <i class="ph ph-video-camera"></i>
+        <span>Call</span>
+      </button>
+      <div class="user-count">
+        <i class="ph ph-users"></i>
+        <span id="user-count">1</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="room-main">
+    <!-- Player Section -->
+    <div class="player-section">
+      <!-- YouTube Player -->
+      <div class="player-wrapper">
+        <div id="youtube-player"></div>
+        <div class="player-placeholder" id="player-placeholder">
+          <i class="ph ph-youtube-logo"></i>
+          <h2>Paste a YouTube link below to start watching</h2>
+          <p>Your partner will see the same video in perfect sync ✨</p>
+        </div>
+      </div>
+
+      <!-- Video URL Input -->
+      <div class="url-input-wrapper">
+        <div class="url-input-container">
+          <i class="ph ph-link"></i>
+          <input type="text" id="video-url-input" placeholder="Paste YouTube URL here..." autocomplete="off">
+          <button id="load-video-btn" class="load-btn">
+            <i class="ph ph-play"></i>
+            <span>Load</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Video Call Overlay (floats over player) -->
+      <div id="call-overlay" class="call-overlay">
+        <div id="remote-video-container" class="video-container remote">
+          <video id="remote-video" autoplay playsinline></video>
+          <span class="video-label">Partner</span>
+        </div>
+        <div id="local-video-container" class="video-container local">
+          <video id="local-video" autoplay playsinline muted></video>
+          <span class="video-label">You</span>
+        </div>
+        <div class="call-controls" id="call-controls">
+          <button id="minimize-btn" class="call-control-btn" title="Minimize Call">
+            <i class="ph ph-arrows-in-simple"></i>
+          </button>
+          <button id="mute-btn" class="call-control-btn" title="Toggle Microphone">
+            <i class="ph ph-microphone"></i>
+          </button>
+          <button id="camera-btn" class="call-control-btn" title="Toggle Camera">
+            <i class="ph ph-video-camera"></i>
+          </button>
+          <button id="end-call-btn" class="call-control-btn end-call" title="End Call">
+            <i class="ph ph-phone-disconnect"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Sidebar -->
+    <aside class="chat-section">
+      <div class="chat-header">
+        <h3><i class="ph ph-chat-dots"></i> Live Chat</h3>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="chat-welcome">
+          <i class="ph ph-sparkle"></i>
+          <p>Welcome! Share the room code with your partner to start watching together.</p>
+        </div>
+      </div>
+      <div class="chat-input-wrapper">
+        <input type="text" id="chat-input" placeholder="Type a message..." autocomplete="off">
+        <button id="send-btn" class="send-btn">
+          <i class="ph ph-paper-plane-tilt"></i>
+        </button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- PeerJS for P2P connections (CDN — no npm needed) -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="/js/room.js"></script>
+</body>
+</html>
