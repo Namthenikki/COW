@@ -916,6 +916,58 @@
     }
   }
 
+  // ─── Fullscreen PIP Management ───
+  // Move the video call PIP inside the player-wrapper when fullscreen is active
+  // so it doesn't disappear (browsers only render the fullscreen element + its children)
+  function initFullscreenPipManager() {
+    const pip = document.getElementById('call-overlay');
+    if (!pip) return;
+
+    let pipOriginalParent = pip.parentElement;
+    let pipOriginalNextSibling = pip.nextSibling;
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    function handleFullscreenChange() {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      const playerWrapper = document.getElementById('player-wrapper');
+
+      if (fsEl && playerWrapper && (fsEl === playerWrapper || playerWrapper.contains(fsEl))) {
+        // Entering fullscreen — move PIP inside the fullscreen element
+        pipOriginalParent = pip.parentElement;
+        pipOriginalNextSibling = pip.nextSibling;
+        pip.classList.add('call-pip-fullscreen');
+        fsEl.appendChild(pip);
+
+        // Reset PIP position inside fullscreen context
+        pip.style.position = 'fixed';
+        pip.style.bottom = '12px';
+        pip.style.right = '12px';
+        pip.style.top = 'auto';
+        pip.style.left = 'auto';
+        pip.style.width = '120px';
+      } else {
+        // Exiting fullscreen — move PIP back to its original parent
+        pip.classList.remove('call-pip-fullscreen');
+        if (pipOriginalParent) {
+          if (pipOriginalNextSibling && pipOriginalNextSibling.parentElement === pipOriginalParent) {
+            pipOriginalParent.insertBefore(pip, pipOriginalNextSibling);
+          } else {
+            pipOriginalParent.appendChild(pip);
+          }
+        } else {
+          document.body.appendChild(pip);
+        }
+
+        // Restore position
+        pip.style.width = '';
+        pip.style.position = '';
+        restorePipPosition(pip);
+      }
+    }
+  }
+
   // ─── Call UI ───
   function updateCallButtonUI() {
     const btn = document.getElementById('call-btn');
@@ -1214,6 +1266,7 @@
     document.getElementById('minimize-btn').addEventListener('click', toggleCallMinimization);
 
     initPipDrag();
+    initFullscreenPipManager();
 
     // ── Chat ──
     document.getElementById('send-btn').addEventListener('click', sendChatMessage);
@@ -1241,6 +1294,22 @@
         e.returnValue = '';
       }
     });
+    // ── Mobile keyboard: prevent scroll that hides the video player ──
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        // When keyboard opens, the visual viewport shrinks but we don't want
+        // the browser to scroll the page — the player should stay sticky at top
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+
+        // Scroll chat messages to bottom so latest messages stay visible
+        const msgs = document.getElementById('chat-messages');
+        if (msgs) {
+          requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+        }
+      });
+    }
   }
 
 })();
