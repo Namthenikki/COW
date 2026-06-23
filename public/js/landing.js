@@ -28,7 +28,7 @@
         this.vx = (Math.random() - 0.5) * 0.5;
         this.vy = (Math.random() - 0.5) * 0.5;
         this.radius = Math.random() * 2 + 0.5;
-        this.hue = Math.random() > 0.5 ? 190 : 270; // cyan or purple
+        this.hue = Math.random() > 0.5 ? 190 : 214; // cyan or blue
         this.alpha = Math.random() * 0.4 + 0.1;
       }
 

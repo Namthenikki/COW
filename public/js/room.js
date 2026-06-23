@@ -68,7 +68,66 @@
     initPeer();
     initPlayer();
     initUI();
+    initKeyboardHandler();
   });
+
+  // ─── Mobile Keyboard Handler ───
+  // Ensures chat input stays visible when virtual keyboard opens
+  function initKeyboardHandler() {
+    if (!window.visualViewport) return;
+
+    const vv = window.visualViewport;
+    let initialHeight = vv.height;
+
+    // Measure how much of the screen the keyboard covers and expose it as a
+    // CSS variable so the chat panel can sit directly above the keyboard.
+    // This self-adapts: with `interactive-widget=resizes-content` the layout
+    // viewport already shrinks (inset ≈ 0); otherwise we lift the panel ourselves.
+    const updateKeyboardInset = () => {
+      const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      document.documentElement.style.setProperty('--kb-height', inset + 'px');
+      const isKeyboard = vv.height < initialHeight * 0.75;
+      document.body.classList.toggle('keyboard-open', isKeyboard);
+
+      if (isKeyboard) {
+        // Keep the focused input (and the text being typed) in view.
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+          requestAnimationFrame(() => {
+            active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          });
+        }
+      } else {
+        // Keyboard closed — reset baseline so orientation changes stay correct.
+        initialHeight = vv.height;
+      }
+    };
+
+    vv.addEventListener('resize', updateKeyboardInset);
+    vv.addEventListener('scroll', updateKeyboardInset);
+
+    // Also handle focus on chat input specifically
+    const chatInput = document.getElementById('chat-input');
+    if (chatInput) {
+      chatInput.addEventListener('focus', () => {
+        setTimeout(() => {
+          updateKeyboardInset();
+          chatInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }, 300);
+      });
+    }
+
+    // Handle URL input too
+    const urlInput = document.getElementById('video-url-input');
+    if (urlInput) {
+      urlInput.addEventListener('focus', () => {
+        setTimeout(() => {
+          updateKeyboardInset();
+          urlInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }, 300);
+      });
+    }
+  }
 
   // ═══════════════════════════════════════════════════════
   //  PEERJS — P2P Connection

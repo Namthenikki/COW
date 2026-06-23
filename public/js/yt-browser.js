@@ -7,7 +7,6 @@ window.YTBrowser = (function () {
   let searchTimer = null;
   let roomCode = '';
   let userName = '';
-  let authEnabled = false; // Whether OAuth is configured on the server
 
   function init(selectCallback, context = {}) {
     onSelectVideo = selectCallback;
@@ -15,18 +14,9 @@ window.YTBrowser = (function () {
     userName = context.userName || 'Guest';
     bindTabs();
     bindSearch();
-    bindAuth();
     bindFab();
     loadDiscover();
     updateRoomCode();
-
-    window.addEventListener('message', (e) => {
-      if (e.data?.type === 'cowatch-auth-success') {
-        updateAuthUI();
-        if (currentTab === 'library') loadLibrary();
-        showBrowserToast('Signed in! Your library is ready.');
-      }
-    });
   }
 
   function setContext(ctx) {
@@ -54,7 +44,6 @@ window.YTBrowser = (function () {
         document.getElementById(`yt-panel-${currentTab}`)?.classList.add('active');
 
         if (currentTab === 'discover') loadDiscover();
-        if (currentTab === 'library') loadLibrary();
       });
     });
   }
@@ -77,73 +66,6 @@ window.YTBrowser = (function () {
         if (q) search(q);
       }
     });
-  }
-
-  function bindAuth() {
-    document.getElementById('yt-login-btn')?.addEventListener('click', async () => {
-      try {
-        sessionStorage.setItem('cowatch-return-url', location.href);
-        await YTAuth.login();
-      } catch (e) {
-        showBrowserToast(e.message);
-      }
-    });
-
-    document.getElementById('yt-logout-btn')?.addEventListener('click', () => {
-      YTAuth.logout();
-      updateAuthUI();
-      loadLibrary();
-      showBrowserToast('Signed out');
-    });
-
-    // Check if OAuth is configured on the server
-    checkAuthConfig();
-  }
-
-  async function checkAuthConfig() {
-    try {
-      authEnabled = await YTAuth.isConfigured();
-    } catch {
-      authEnabled = false;
-    }
-    updateAuthUI();
-  }
-
-  async function updateAuthUI() {
-    const loginBtn = document.getElementById('yt-login-btn');
-    const userBar = document.getElementById('yt-user-bar');
-    const loginPrompt = document.getElementById('yt-login-prompt');
-    const authRow = document.querySelector('.yt-auth-row');
-    const libraryTab = document.querySelector('.yt-tab[data-tab="library"]');
-
-    // If OAuth is not configured, hide all auth UI
-    if (!authEnabled) {
-      if (loginBtn) loginBtn.style.display = 'none';
-      if (loginPrompt) loginPrompt.style.display = 'none';
-      if (userBar) userBar.style.display = 'none';
-      if (authRow) authRow.style.display = 'none';
-      // Rename "My Account" tab to indicate it's unavailable or hide it
-      if (libraryTab) {
-        libraryTab.innerHTML = '<i class="ph ph-user-circle"></i> Library';
-        libraryTab.title = 'Set up Google OAuth to use your library';
-      }
-      return;
-    }
-
-    const loggedIn = await YTAuth.isLoggedIn();
-    const profile = loggedIn ? await YTAuth.fetchProfile() : null;
-
-    if (authRow) authRow.style.display = '';
-    if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : 'flex';
-    if (loginPrompt) loginPrompt.style.display = loggedIn ? 'none' : 'flex';
-    if (userBar) {
-      userBar.style.display = loggedIn ? 'flex' : 'none';
-      if (profile) {
-        userBar.querySelector('.yt-user-name').textContent = profile.name || 'You';
-        const img = userBar.querySelector('img');
-        if (img && profile.picture) img.src = profile.picture;
-      }
-    }
   }
 
   function showBrowserToast(msg) {
@@ -229,104 +151,6 @@ window.YTBrowser = (function () {
       renderGrid('yt-search-grid', [], e.message);
     }
     setLoading('yt-panel-search', false);
-  }
-
-  async function loadLibrary() {
-    const subsEl = document.getElementById('yt-subs-grid');
-    const playlistsEl = document.getElementById('yt-playlists-grid');
-    const likedEl = document.getElementById('yt-liked-grid');
-    const loginPrompt = document.getElementById('yt-login-prompt');
-
-    // If OAuth is not configured, show a helpful message
-    if (!authEnabled) {
-      if (subsEl) subsEl.innerHTML = '';
-      if (playlistsEl) playlistsEl.innerHTML = '';
-      if (likedEl) likedEl.innerHTML = `
-        <div class="yt-empty">
-          <i class="ph ph-lock-key"></i>
-          <p>YouTube login requires Google OAuth setup on the server.<br>
-          <strong>You can still search and play any video!</strong><br>
-          Use the Search tab or Home tab to find videos.</p>
-        </div>`;
-      if (loginPrompt) loginPrompt.style.display = 'none';
-      return;
-    }
-
-    const loggedIn = await YTAuth.isLoggedIn();
-    if (loginPrompt) loginPrompt.style.display = loggedIn ? 'none' : 'flex';
-    if (!loggedIn) {
-      if (subsEl) subsEl.innerHTML = '';
-      if (playlistsEl) playlistsEl.innerHTML = '';
-      if (likedEl) likedEl.innerHTML = '';
-      return;
-    }
-
-    setLoading('yt-panel-library', true);
-    try {
-      const [subs, playlists, liked] = await Promise.all([
-        YTAuth.getSubscriptions().catch(() => []),
-        YTAuth.getPlaylists().catch(() => []),
-        YTAuth.getLikedVideos().catch(() => [])
-      ]);
-
-      if (subsEl) {
-        subsEl.innerHTML = subs.map((s) => `
-          <button class="yt-channel-card" data-channel="${s.channelId}" type="button">
-            <img src="${s.thumbnail}" alt="">
-            <span>${escapeHTML(s.title)}</span>
-          </button>
-        `).join('') || '<p class="yt-muted">No subscriptions</p>';
-
-        subsEl.querySelectorAll('.yt-channel-card').forEach((card) => {
-          card.addEventListener('click', () => loadChannel(card.dataset.channel));
-        });
-      }
-
-      if (playlistsEl) {
-        playlistsEl.innerHTML = playlists.map((p) => `
-          <button class="yt-playlist-card" data-playlist="${p.playlistId}" type="button">
-            <img src="${p.thumbnail || ''}" alt="">
-            <div><strong>${escapeHTML(p.title)}</strong></div>
-          </button>
-        `).join('') || '<p class="yt-muted">No playlists</p>';
-
-        playlistsEl.querySelectorAll('.yt-playlist-card').forEach((card) => {
-          card.addEventListener('click', () => loadPlaylist(card.dataset.playlist));
-        });
-      }
-
-      renderGrid('yt-liked-grid', liked, 'No liked videos');
-    } catch (e) {
-      showBrowserToast(e.message);
-    }
-    setLoading('yt-panel-library', false);
-  }
-
-  async function loadChannel(channelId) {
-    try {
-      const data = await PipedClient.channel(channelId);
-      const videos = PipedClient.normalizeList(data.relatedStreams || []);
-      currentTab = 'search';
-      document.querySelectorAll('.yt-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'search'));
-      document.querySelectorAll('.yt-panel').forEach((p) => p.classList.remove('active'));
-      document.getElementById('yt-panel-search')?.classList.add('active');
-      renderGrid('yt-search-grid', videos, 'No videos from this channel');
-    } catch (e) {
-      showBrowserToast(e.message);
-    }
-  }
-
-  async function loadPlaylist(playlistId) {
-    try {
-      const videos = await YTAuth.getPlaylistVideos(playlistId);
-      currentTab = 'search';
-      document.querySelectorAll('.yt-tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'search'));
-      document.querySelectorAll('.yt-panel').forEach((p) => p.classList.remove('active'));
-      document.getElementById('yt-panel-search')?.classList.add('active');
-      renderGrid('yt-search-grid', videos, 'Playlist empty');
-    } catch (e) {
-      showBrowserToast(e.message);
-    }
   }
 
   function _updateFab() {
